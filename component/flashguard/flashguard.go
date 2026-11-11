@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -155,7 +156,15 @@ func MarkDestination(ctx context.Context, metadata *C.Metadata, earlier string) 
 var uncheckedEndpointTypes = []string{"openvpn", "zerotier", "easytier", "masque"}
 
 // UncheckedEndpoints is a proxy mapping a mounted node may not be built from:
-// a type above, or a WireGuard node given peers, whose endpoints are theirs.
+// a type above, or a node whose options give it an endpoint besides its
+// server, which the guard never sees:
+//   - WireGuard given peers, each with its own server;
+//   - VLESS with xhttp-opts.download-settings, whose server takes the
+//     downlink;
+//   - Hysteria2 with realm-opts enabled, which fetches its server-url and
+//     may be handed its peer by the realm.
+//
+// Keys are matched as the proxy decoder matches them: any case, _ for -.
 func UncheckedEndpoints(mapping map[string]any) bool {
 	kind, _ := mapping["type"].(string)
 	kind = strings.ToLower(kind)
@@ -164,18 +173,84 @@ func UncheckedEndpoints(mapping map[string]any) bool {
 			return true
 		}
 	}
-	if kind != "wireguard" {
-		return false
-	}
-	for name, value := range mapping {
-		if !strings.EqualFold(strings.ReplaceAll(name, "_", "-"), "peers") || value == nil {
-			continue
+	switch kind {
+	case "wireguard":
+		for _, value := range optionValues(mapping, "peers") {
+			if list, ok := value.([]any); value != nil && (!ok || len(list) > 0) {
+				return true
+			}
 		}
-		if list, ok := value.([]any); !ok || len(list) > 0 {
-			return true
+	case "vless":
+		for _, xhttp := range optionValues(mapping, "xhttp-opts") {
+			for _, download := range optionValues(asMap(xhttp), "download-settings") {
+				if download != nil {
+					return true
+				}
+			}
+		}
+	case "hysteria2":
+		for _, realm := range optionValues(mapping, "realm-opts") {
+			for _, enable := range optionValues(asMap(realm), "enable") {
+				if weakTrue(enable) {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+// Every value under a key the proxy decoder would read as name.
+func optionValues(mapping map[string]any, name string) []any {
+	var values []any
+	for key, value := range mapping {
+		if strings.EqualFold(strings.ReplaceAll(key, "_", "-"), name) {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func asMap(value any) map[string]any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return typed
+	case map[any]any:
+		converted := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if name, ok := key.(string); ok {
+				converted[name] = item
+			}
+		}
+		return converted
+	}
+	return nil
+}
+
+// As a weakly typed decode reads a bool; anything it cannot read counts as
+// true, so the node is dropped rather than guessed safe.
+func weakTrue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		if typed == "" {
+			return false
+		}
+		parsed, err := strconv.ParseBool(typed)
+		return err != nil || parsed
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case uint64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	}
+	return true
 }
 
 // IsRefused is a refusal however a hop above the node passed it on: by
@@ -242,4 +317,17 @@ func CheckPacket(node string, addr net.Addr) error {
 		notify(node, "a packet to "+addr.String())
 	}
 	return fmt.Errorf("%w: %s refused a packet to %s", ErrRefused, node, addr)
+}
+
+// CheckPacketHost is what a mounted node's packet connection runs before it
+// resolves a name for a datagram on a reused flow: the address the name
+// resolves to may be no tailnet address, the name still is.
+func CheckPacketHost(node, host string) error {
+	if !ProtectedHost(host) {
+		return nil
+	}
+	if notify := OnRefuse; notify != nil {
+		notify(node, "a packet to the name "+normalizeHost(host))
+	}
+	return fmt.Errorf("%w: %s refused a packet to %s", ErrRefused, node, host)
 }

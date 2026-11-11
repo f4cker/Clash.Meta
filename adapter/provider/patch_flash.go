@@ -207,6 +207,17 @@ type guardedPacketConn struct {
 	node string
 }
 
+// A reused flow resolves a datagram's name before it writes to the address,
+// so WriteTo alone would see only what the name resolved to.
+func (c *guardedPacketConn) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
+	if metadata != nil {
+		if err := flashguard.CheckPacketHost(c.node, metadata.Host); err != nil {
+			return err
+		}
+	}
+	return c.PacketConn.ResolveUDP(ctx, metadata)
+}
+
 func (c *guardedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	if err := flashguard.CheckPacket(c.node, addr); err != nil {
 		return 0, err

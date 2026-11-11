@@ -134,6 +134,18 @@ func TestUncheckedEndpoints(t *testing.T) {
 		{map[string]any{"type": "easytier"}, true},
 		{map[string]any{"type": "masque"}, true},
 		{map[string]any{"type": "ss"}, false},
+		{map[string]any{"type": "vless", "network": "xhttp", "xhttp-opts": map[string]any{"path": "/x"}}, false},
+		{map[string]any{"type": "vless", "xhttp-opts": map[string]any{"download-settings": map[string]any{"server": "100.101.1.1"}}}, true},
+		{map[string]any{"type": "vless", "XHTTP_Opts": map[string]any{"Download_Settings": map[string]any{}}}, true},
+		{map[string]any{"type": "vless", "xhttp-opts": map[any]any{"download-settings": map[any]any{"path": "/d"}}}, true},
+		{map[string]any{"type": "vless", "xhttp-opts": map[string]any{"download-settings": nil}}, false},
+		{map[string]any{"type": "vmess", "xhttp-opts": map[string]any{"download-settings": map[string]any{}}}, false},
+		{map[string]any{"type": "hysteria2", "realm-opts": map[string]any{"enable": false, "server-url": "http://100.101.1.1"}}, false},
+		{map[string]any{"type": "hysteria2", "realm-opts": map[string]any{"enable": true}}, true},
+		{map[string]any{"type": "Hysteria2", "Realm_Opts": map[string]any{"ENABLE": "true"}}, true},
+		{map[string]any{"type": "hysteria2", "realm-opts": map[string]any{"enable": 1}}, true},
+		{map[string]any{"type": "hysteria2", "realm-opts": map[string]any{"enable": "yes"}}, true},
+		{map[string]any{"type": "hysteria2", "realm-opts": map[string]any{"enable": "0"}}, false},
 	} {
 		if got := UncheckedEndpoints(c.mapping); got != c.want {
 			t.Errorf("UncheckedEndpoints(%v) = %v, want %v", c.mapping, got, c.want)
@@ -155,5 +167,20 @@ func TestIsRefusedThroughAnyWrapping(t *testing.T) {
 	}
 	if IsRefused(errors.New("dial tcp 192.0.2.9:443: i/o timeout")) || IsRefused(nil) {
 		t.Error("an ordinary error read as a refusal")
+	}
+}
+
+func TestCheckPacketHostRefusesATailnetName(t *testing.T) {
+	SetSuffixes([]string{"corp.example"})
+	t.Cleanup(func() { SetSuffixes(nil) })
+	for _, host := range []string{"nas.tail1.ts.net", "Funnel.TS.net.", "box.corp.example", "100.100.1.1"} {
+		if err := CheckPacketHost("m", host); !errors.Is(err, ErrRefused) {
+			t.Errorf("CheckPacketHost(%q) = %v, want ErrRefused", host, err)
+		}
+	}
+	for _, host := range []string{"", "example.com", "203.0.113.9"} {
+		if err := CheckPacketHost("m", host); err != nil {
+			t.Errorf("CheckPacketHost(%q) = %v, want nil", host, err)
+		}
 	}
 }
