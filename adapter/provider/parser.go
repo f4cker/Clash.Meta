@@ -38,6 +38,8 @@ type proxyProviderSchema struct {
 	SizeLimit     int64            `provider:"size-limit,omitempty"`
 	Payload       []map[string]any `provider:"payload,omitempty"`
 	AgeSecretKey  string           `provider:"age-secret-key,omitempty"`
+	// A file that lists `proxies: []` is a real empty set, not a failed load.
+	FlashAllowEmpty bool `provider:"flash-allow-empty,omitempty"`
 
 	HealthCheck healthCheckSchema   `provider:"health-check,omitempty"`
 	Override    overrideSchema      `provider:"override,omitempty"`
@@ -70,7 +72,7 @@ func ParseProxyProvider(name string, mapping map[string]any, tunnel C.Tunnel) (P
 	}
 	hc := NewHealthCheck([]C.Proxy{}, schema.HealthCheck.URL, uint(schema.HealthCheck.TestTimeout), hcInterval, schema.HealthCheck.Lazy, expectedStatus)
 
-	parser, err := NewProxiesParser(name, tunnel, schema.Filter, schema.ExcludeFilter, schema.ExcludeType, schema.DialerProxy, schema.Override, schema.AgeSecretKey)
+	parser, err := NewProxiesParser(name, tunnel, schema.Filter, schema.ExcludeFilter, schema.ExcludeType, schema.DialerProxy, schema.Override, schema.AgeSecretKey, schema.FlashAllowEmpty)
 	if err != nil {
 		return nil, err
 	}
