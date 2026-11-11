@@ -141,7 +141,7 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	}
 	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (ruleStrategy, error) {
 		strategy, err := rulesParse(bytes, newStrategy(behavior, parse), format)
-		return gateRuleSet(name, strategy, err)
+		return gateRuleSet(name, strategy, err, bytes, behavior, format)
 	}, onUpdate)
 
 	wrapper := &RuleSetProvider{

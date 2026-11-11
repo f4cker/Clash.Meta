@@ -467,7 +467,7 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 					dropped[idx] = true
 					continue
 				}
-				proxies = append(proxies, proxy)
+				proxies = append(proxies, guardMountProxy(pdName, proxy))
 				accepted = append(accepted, mapping)
 			}
 		}

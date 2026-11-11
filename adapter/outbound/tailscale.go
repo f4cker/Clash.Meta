@@ -17,6 +17,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/metacubex/mihomo/component/flashguard"
 	"github.com/metacubex/mihomo/component/iface/anet"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
@@ -195,24 +196,14 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 	}
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 	outbound.server = &tsnet.Server{
-		Dir:        option.StateDir,
-		Hostname:   option.Hostname,
-		AuthKey:    option.AuthKey,
-		ControlURL: option.ControlURL,
-		Ephemeral:  option.Ephemeral,
-		SystemDialer: func(ctx context.Context, network, address string) (net.Conn, error) {
-			log.Debugln("[Tailscale](%s) SystemDialer: start dial %s %s", option.Name, network, address)
-			conn, err := outbound.dialer.DialContext(ctx, network, address)
-			log.Debugln("[Tailscale](%s) SystemDialer: finish dial %s %s, err: %v", option.Name, network, address, err)
-			return conn, err
-		},
-		SystemPacketListener: func(ctx context.Context, network, address string) (net.PacketConn, error) {
-			log.Debugln("[Tailscale](%s) SystemPacketListener: start listen %s %s", option.Name, network, address)
-			pc, err := outbound.dialer.ListenPacket(ctx, network, address, netip.AddrPort{})
-			log.Debugln("[Tailscale](%s) SystemPacketListener: finish listen %s %s, err: %v", option.Name, network, address, err)
-			return pc, err
-		},
-		ExtraRootCAs: ca.GetCertPool(),
+		Dir:                  option.StateDir,
+		Hostname:             option.Hostname,
+		AuthKey:              option.AuthKey,
+		ControlURL:           option.ControlURL,
+		Ephemeral:            option.Ephemeral,
+		SystemDialer:         outbound.SystemDial,
+		SystemPacketListener: outbound.SystemListenPacket,
+		ExtraRootCAs:         ca.GetCertPool(),
 		LookupHook: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			log.Debugln("[Tailscale](%s) LookupHook: start lookup %s", option.Name, host)
 			ips, err := resolver.LookupIPWithResolver(ctx, host, resolver.ProxyServerHostResolver)
@@ -233,6 +224,24 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 	tailscaleLive[outbound] = struct{}{}
 	tailscaleRegistryMu.Unlock()
 	return outbound, nil
+}
+
+// SystemDial is how the node reaches control, DERP and peers. A dial made
+// here is marked so a mounted subscription node on its chain refuses it.
+func (t *Tailscale) SystemDial(ctx context.Context, network, address string) (net.Conn, error) {
+	ctx = flashguard.WithCarrier(ctx, "the Tailscale node "+t.option.Name)
+	log.Debugln("[Tailscale](%s) SystemDialer: start dial %s %s", t.option.Name, network, address)
+	conn, err := t.dialer.DialContext(ctx, network, address)
+	log.Debugln("[Tailscale](%s) SystemDialer: finish dial %s %s, err: %v", t.option.Name, network, address, err)
+	return conn, err
+}
+
+func (t *Tailscale) SystemListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	ctx = flashguard.WithCarrier(ctx, "the Tailscale node "+t.option.Name)
+	log.Debugln("[Tailscale](%s) SystemPacketListener: start listen %s %s", t.option.Name, network, address)
+	pc, err := t.dialer.ListenPacket(ctx, network, address, netip.AddrPort{})
+	log.Debugln("[Tailscale](%s) SystemPacketListener: finish listen %s %s, err: %v", t.option.Name, network, address, err)
+	return pc, err
 }
 
 func (t *Tailscale) start(options TailscaleStartOptions) error {

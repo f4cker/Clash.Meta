@@ -7,6 +7,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/structure"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/flashguard"
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -80,6 +81,7 @@ func ParseProxyProvider(name string, mapping map[string]any, tunnel C.Tunnel) (P
 		return nil, err
 	}
 	flash.gated = schema.Type == "file" || schema.Type == "http"
+	flash.mount = flashguard.IsMountProvider(name)
 	parser, err := NewProxiesParser(name, tunnel, schema.Filter, schema.ExcludeFilter, schema.ExcludeType, schema.DialerProxy, schema.Override, schema.AgeSecretKey, schema.FlashAllowEmpty, flash)
 	if err != nil {
 		return nil, err
