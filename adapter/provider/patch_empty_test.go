@@ -92,7 +92,7 @@ func TestAllowEmptyStillRejectsAFilterMatchingNothing(t *testing.T) {
 }
 
 func TestWithoutTheFlagAnEmptyListStaysAnError(t *testing.T) {
-	parser, err := NewProxiesParser("plain", nil, "", "", "", "", overrideSchema{}, "", false)
+	parser, err := NewProxiesParser("plain", nil, "", "", "", "", overrideSchema{}, "", false, flashOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestWithoutTheFlagAnEmptyListStaysAnError(t *testing.T) {
 }
 
 func TestAllowEmptyAfterExcludeTypeIsEmpty(t *testing.T) {
-	parser, err := NewProxiesParser("mount", nil, "", "", "tailscale", "", overrideSchema{}, "", true)
+	parser, err := NewProxiesParser("mount", nil, "", "", "tailscale", "", overrideSchema{}, "", true, flashOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestAllowEmptyAfterExcludeTypeIsEmpty(t *testing.T) {
 }
 
 func TestAllowEmptyRejectsAListOfMalformedEntries(t *testing.T) {
-	parser, err := NewProxiesParser("mount", nil, "", "", "", "", overrideSchema{}, "", true)
+	parser, err := NewProxiesParser("mount", nil, "", "", "", "", overrideSchema{}, "", true, flashOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

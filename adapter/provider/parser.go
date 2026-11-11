@@ -40,6 +40,9 @@ type proxyProviderSchema struct {
 	AgeSecretKey  string           `provider:"age-secret-key,omitempty"`
 	// A file that lists `proxies: []` is a real empty set, not a failed load.
 	FlashAllowEmpty bool `provider:"flash-allow-empty,omitempty"`
+	// Flash's mount providers: what to drop before a node is built.
+	FlashExcludeDialer    string `provider:"flash-exclude-dialer,omitempty"`
+	FlashExcludeInterface bool   `provider:"flash-exclude-interface,omitempty"`
 
 	HealthCheck healthCheckSchema   `provider:"health-check,omitempty"`
 	Override    overrideSchema      `provider:"override,omitempty"`
@@ -72,7 +75,12 @@ func ParseProxyProvider(name string, mapping map[string]any, tunnel C.Tunnel) (P
 	}
 	hc := NewHealthCheck([]C.Proxy{}, schema.HealthCheck.URL, uint(schema.HealthCheck.TestTimeout), hcInterval, schema.HealthCheck.Lazy, expectedStatus)
 
-	parser, err := NewProxiesParser(name, tunnel, schema.Filter, schema.ExcludeFilter, schema.ExcludeType, schema.DialerProxy, schema.Override, schema.AgeSecretKey, schema.FlashAllowEmpty)
+	flash, err := newFlashOptions(schema.FlashExcludeDialer, schema.FlashExcludeInterface)
+	if err != nil {
+		return nil, err
+	}
+	flash.gated = schema.Type == "file" || schema.Type == "http"
+	parser, err := NewProxiesParser(name, tunnel, schema.Filter, schema.ExcludeFilter, schema.ExcludeType, schema.DialerProxy, schema.Override, schema.AgeSecretKey, schema.FlashAllowEmpty, flash)
 	if err != nil {
 		return nil, err
 	}
