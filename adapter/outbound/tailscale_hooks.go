@@ -16,6 +16,9 @@ var (
 	TailscaleStartGate func(t *Tailscale, started bool) error
 	// Called from the IPN bus watcher of each started node.
 	TailscaleStateHook func(t *Tailscale, state string, authURLReady bool)
+	// May change the exit node and routes of a node before it is built; the
+	// node keeps what its source wrote as ConfiguredOption.
+	TailscaleOptionHook func(option *TailscaleOption)
 )
 
 var (
