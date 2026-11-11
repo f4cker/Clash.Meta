@@ -73,7 +73,7 @@ func TestWithoutFlashOptionsNothingIsDropped(t *testing.T) {
 
 func TestProxiesGateRefusalKeepsTheLoadedNodes(t *testing.T) {
 	refused := errors.New("refused")
-	ProxiesGate = func(name string, mappings []map[string]any) error {
+	ProxiesGate = func(name string, mappings []map[string]any, _ []C.Proxy) error {
 		for _, mapping := range mappings {
 			if mapping["name"] == "c" {
 				return refused
@@ -111,6 +111,12 @@ func TestMountProviderDropsProtectedServersAndRoutingMarks(t *testing.T) {
   - {name: tailnet, type: socks5, server: 100.101.2.3, port: 1080}
   - {name: magic, type: socks5, server: box.tail1.ts.net, port: 1080}
   - {name: marked, type: socks5, server: 192.0.2.1, port: 1, routing-mark: 6666}
+  - {name: peered, type: wireguard, private-key: eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=, ip: 10.0.0.2, peers: [{server: 100.101.1.1, port: 51820, public-key: Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=, allowed-ips: [0.0.0.0/0]}]}
+  - {name: peered, type: socks5, server: 192.0.2.1, port: 3}
+  - {name: vpn, type: openvpn, server: 192.0.2.1, port: 1194}
+  - {name: zt, type: zerotier}
+  - {name: et, type: easytier}
+  - {name: mq, type: masque, server: 192.0.2.1, port: 443}
   - {name: plain, type: socks5, server: 192.0.2.1, port: 2}
 `))
 	if err != nil {

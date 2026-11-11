@@ -3,6 +3,7 @@ package flashguard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"testing"
@@ -74,7 +75,7 @@ func TestCheckRefusesByCarrierDestinationAndServer(t *testing.T) {
 		{"host", context.Background(), "192.0.2.1", &C.Metadata{Host: "nas.tail1.ts.net", DstPort: 22}},
 		{"carrier", WithCarrier(context.Background(), "the Tailscale node ts"), "192.0.2.1", plain},
 		{"server", context.Background(), "127.0.0.1", plain},
-		{"marked", MarkDestination(context.Background(), &C.Metadata{DstIP: netip.MustParseAddr("100.100.1.1"), DstPort: 22}), "192.0.2.1", plain},
+		{"marked", MarkDestination(context.Background(), &C.Metadata{DstIP: netip.MustParseAddr("100.100.1.1"), DstPort: 22}, ""), "192.0.2.1", plain},
 	}
 	for _, c := range cases {
 		if err := Check(c.ctx, "m", c.server, c.metadata); !errors.Is(err, ErrRefused) {
@@ -84,7 +85,7 @@ func TestCheckRefusesByCarrierDestinationAndServer(t *testing.T) {
 	if len(refused) != len(cases) {
 		t.Errorf("OnRefuse saw %d refusals, want %d: %v", len(refused), len(cases), refused)
 	}
-	if ctx := MarkDestination(context.Background(), plain); ctx != context.Background() {
+	if ctx := MarkDestination(context.Background(), plain, ""); ctx != context.Background() {
 		if _, ok := Carrier(ctx); ok {
 			t.Error("an ordinary destination marked its context")
 		}
@@ -97,5 +98,62 @@ func TestCheckPacketRefusesTailscaleDestinations(t *testing.T) {
 	}
 	if err := CheckPacket("m", &net.UDPAddr{IP: net.ParseIP("192.0.2.7"), Port: 53}); err != nil {
 		t.Errorf("a packet to 192.0.2.7 = %v, want it allowed", err)
+	}
+}
+
+// A sniffer may replace a protected address with an ordinary name: what was
+// read before it still marks the connection.
+func TestMarkDestinationKeepsWhatWasProtectedBeforeSniffing(t *testing.T) {
+	before := &C.Metadata{DstIP: netip.MustParseAddr("100.101.2.3"), DstPort: 443}
+	earlier := ProtectedRemote(before)
+	if earlier == "" {
+		t.Fatal("100.101.2.3 was not read as protected")
+	}
+	sniffed := &C.Metadata{Host: "nas.example.com", DstPort: 443}
+	carrier, ok := Carrier(MarkDestination(context.Background(), sniffed, earlier))
+	if !ok || carrier != "a connection to 100.101.2.3:443" {
+		t.Errorf("carrier = %q, %v; want the address read before sniffing", carrier, ok)
+	}
+	if ProtectedRemote(sniffed) != "" {
+		t.Error("an ordinary name was read as protected")
+	}
+}
+
+func TestUncheckedEndpoints(t *testing.T) {
+	for _, c := range []struct {
+		mapping map[string]any
+		want    bool
+	}{
+		{map[string]any{"type": "wireguard", "server": "192.0.2.1"}, false},
+		{map[string]any{"type": "wireguard", "server": "192.0.2.1", "peers": []any{}}, false},
+		{map[string]any{"type": "wireguard", "peers": []any{map[string]any{"server": "100.101.1.1"}}}, true},
+		{map[string]any{"type": "wireguard", "Peers": []any{map[string]any{"server": "192.0.2.1"}}}, true},
+		{map[string]any{"type": "wireguard", "peers": "odd"}, true},
+		{map[string]any{"type": "openvpn"}, true},
+		{map[string]any{"type": "ZeroTier"}, true},
+		{map[string]any{"type": "easytier"}, true},
+		{map[string]any{"type": "masque"}, true},
+		{map[string]any{"type": "ss"}, false},
+	} {
+		if got := UncheckedEndpoints(c.mapping); got != c.want {
+			t.Errorf("UncheckedEndpoints(%v) = %v, want %v", c.mapping, got, c.want)
+		}
+	}
+}
+
+func TestIsRefusedThroughAnyWrapping(t *testing.T) {
+	refused := Check(WithCarrier(context.Background(), "a test"), "m", "192.0.2.1", &C.Metadata{Host: "example.com", DstPort: 443})
+	for name, err := range map[string]error{
+		"as is":     refused,
+		"wrapped":   fmt.Errorf("192.0.2.9:443 connect error: %w", refused),
+		"text only": fmt.Errorf("192.0.2.9:443 connect error: %s", refused.Error()),
+		"twice":     fmt.Errorf("hop: %v", fmt.Errorf("inner: %s", refused)),
+	} {
+		if !IsRefused(err) {
+			t.Errorf("%s: IsRefused(%v) = false", name, err)
+		}
+	}
+	if IsRefused(errors.New("dial tcp 192.0.2.9:443: i/o timeout")) || IsRefused(nil) {
+		t.Error("an ordinary error read as a refusal")
 	}
 }

@@ -451,6 +451,8 @@ func handleUDPConn(packet C.PacketAdapter) {
 		dial := func() (C.PacketConn, C.WriteBackProxy, error) {
 			originMetadata := metadata  // save origin metadata
 			metadata = metadata.Clone() // don't modify PacketAdapter's metadata
+			// A sniffer may override a protected destination with a name.
+			earlier := flashguard.ProtectedRemote(metadata)
 
 			if err := sender.DoSniff(metadata); err != nil {
 				log.Warnln("[UDP] DoSniff error: %s", err.Error())
@@ -466,7 +468,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			}
 
 			dialMetadata := metadata.Pure()
-			ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata), C.DefaultUDPTimeout)
+			ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata, earlier), C.DefaultUDPTimeout)
 			defer cancel()
 			rawPc, err := retry(ctx, func(ctx context.Context) (C.PacketConn, error) {
 				return proxy.ListenPacketContext(ctx, dialMetadata)
@@ -517,6 +519,8 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
+	// A sniffer may override a protected destination with a name.
+	earlier := flashguard.ProtectedRemote(metadata)
 
 	preHandleFailed := false
 	if err := preHandleMetadata(metadata); err != nil {
@@ -573,7 +577,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 	var peekBytes []byte
 	var peekLen int
 
-	ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata), C.DefaultTCPTimeout)
+	ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata, earlier), C.DefaultTCPTimeout)
 	defer cancel()
 	remoteConn, err := retry(ctx, func(ctx context.Context) (remoteConn C.Conn, err error) {
 		remoteConn, err = proxy.DialContext(ctx, dialMetadata)
@@ -735,7 +739,7 @@ func shouldStopRetry(err error) bool {
 	if errors.Is(err, loopback.ErrReject) {
 		return true
 	}
-	if errors.Is(err, flashguard.ErrRefused) {
+	if flashguard.IsRefused(err) {
 		return true
 	}
 	return false
