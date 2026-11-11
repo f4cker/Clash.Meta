@@ -340,7 +340,7 @@ func (cp *CompatibleProvider) Close() error {
 	return cp.compatibleProvider.Close()
 }
 
-func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string) (resource.Parser[[]C.Proxy], error) {
+func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string, allowEmpty bool) (resource.Parser[[]C.Proxy], error) {
 	var excludeTypeArray []string
 	if excludeType != "" {
 		excludeTypeArray = strings.Split(excludeType, "|")
@@ -457,6 +457,9 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 		}
 
 		if len(proxies) == 0 {
+			if allowEmpty && len(filter) == 0 && onlyExcludedTypes(schema.Proxies, excludeTypeArray) {
+				return proxies, nil
+			}
 			if len(filter) > 0 {
 				return nil, errors.New("doesn't match any proxy, please check your filter")
 			}
@@ -465,4 +468,23 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 
 		return proxies, nil
 	}, nil
+}
+
+// onlyExcludedTypes is true for an empty list or one whose every entry has an
+// excluded type, so a list of malformed entries is not taken as empty.
+func onlyExcludedTypes(mappings []map[string]any, excludeTypes []string) bool {
+	for _, mapping := range mappings {
+		pType, _ := mapping["type"].(string)
+		excluded := false
+		for _, excludeType := range excludeTypes {
+			if pType != "" && strings.EqualFold(pType, excludeType) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			return false
+		}
+	}
+	return true
 }
