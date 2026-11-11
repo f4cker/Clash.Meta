@@ -14,15 +14,17 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 )
 
-// ProxiesGate sees the entries a file or http provider is about to hold, on
-// its first load and on every update, and may refuse them; the provider then
-// keeps what it had and its file is not rewritten.
-var ProxiesGate func(name string, mappings []map[string]any) error
+// ProxiesGate sees the entries a file or http provider is about to hold, as
+// written and as built, on its first load and on every update, and may
+// refuse them; the provider then keeps what it had and its file is not
+// rewritten.
+var ProxiesGate func(name string, mappings []map[string]any, proxies []C.Proxy) error
 
 // What Flash sets on a provider it mounts: a node whose dialer-proxy matches
 // excludeDialer, or that binds an interface or a routing mark, is dropped
 // before it is built. A mount provider also drops a node whose server is
-// protected, and guards every node it keeps.
+// protected or that dials endpoints the guard cannot see, and guards every
+// node it keeps.
 type flashOptions struct {
 	excludeDialer    *regexp2.Regexp
 	excludeInterface bool
@@ -113,6 +115,7 @@ type flashEntry struct {
 	dialers    []string
 	interfaces []string
 	marks      []string
+	unchecked  bool
 }
 
 // Read before the provider's own dialer-proxy and override and again after,
@@ -121,6 +124,7 @@ func (o flashOptions) prepare(entry flashEntry, mapping map[string]any) flashEnt
 	entry.dialers = append(entry.dialers, canonicalizeKey(mapping, "dialer-proxy")...)
 	entry.interfaces = append(entry.interfaces, canonicalizeKey(mapping, "interface-name")...)
 	entry.marks = append(entry.marks, canonicalizeKey(mapping, "routing-mark")...)
+	entry.unchecked = entry.unchecked || flashguard.UncheckedEndpoints(mapping)
 	return entry
 }
 
@@ -148,7 +152,7 @@ func (o flashOptions) gate(name string, proxies []C.Proxy, accepted []map[string
 	if !o.gated || ProxiesGate == nil {
 		return nil
 	}
-	if err := ProxiesGate(name, accepted); err != nil {
+	if err := ProxiesGate(name, accepted, proxies); err != nil {
 		for _, proxy := range proxies {
 			_ = proxy.Close()
 		}

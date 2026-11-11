@@ -455,6 +455,12 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 				if flash.enabled() {
 					entry = flash.prepare(entry, mapping)
 				}
+				// Never built: building some of them starts them.
+				if flash.mount && entry.unchecked {
+					proxiesSet[name] = struct{}{}
+					dropped[idx] = true
+					continue
+				}
 
 				proxy, err := adapter.ParseProxy(mapping, adapter.WithTunnelForAPI(tunnel), adapter.WithProviderName(pdName))
 				if err != nil {

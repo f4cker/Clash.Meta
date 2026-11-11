@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/metacubex/mihomo/component/flashguard"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -71,5 +72,45 @@ func TestEnterDialAllowsTheSameDialerForAnotherAddress(t *testing.T) {
 	}
 	if _, err := enterDial(ctx, "Front", "a.example:443"); !errors.Is(err, ErrDialerLoop) {
 		t.Fatalf("got %v, want %v", err, ErrDialerLoop)
+	}
+}
+
+// Records whether the dial it was asked for carried the hop mark.
+type carrierProxy struct {
+	C.Proxy
+	carriers *[]string
+}
+
+func (p carrierProxy) DialContext(ctx context.Context, _ *C.Metadata) (C.Conn, error) {
+	carrier, _ := flashguard.Carrier(ctx)
+	*p.carriers = append(*p.carriers, carrier)
+	return nil, errors.New("recorded")
+}
+
+func (p carrierProxy) ListenPacketContext(ctx context.Context, _ *C.Metadata) (C.PacketConn, error) {
+	carrier, _ := flashguard.Carrier(ctx)
+	*p.carriers = append(*p.carriers, carrier)
+	return nil, errors.New("recorded")
+}
+
+// Every dial through a dialer-proxy, TCP, UDP or WireGuard's UDP dial, is
+// marked as carrying a session, so a mounted node under it refuses it; a
+// mark already there, a Tailscale node's, is kept.
+func TestByNameDialerMarksItsSessionAsCarrying(t *testing.T) {
+	var carriers []string
+	tunnel := &loopTunnel{proxies: map[string]C.Proxy{"Hop": carrierProxy{carriers: &carriers}}}
+	dialer := NewByName("Hop", tunnel)
+	_, _ = dialer.DialContext(context.Background(), "tcp", "192.0.2.1:443")
+	_, _ = dialer.DialContext(context.Background(), "udp", "192.0.2.1:51820")
+	_, _ = dialer.ListenPacket(context.Background(), "udp", "", netip.MustParseAddrPort("192.0.2.1:443"))
+	_, _ = dialer.DialContext(flashguard.WithCarrier(context.Background(), "the Tailscale node ts"), "tcp", "192.0.2.1:443")
+	want := []string{
+		"the session of a proxy dialing through Hop",
+		"the session of a proxy dialing through Hop",
+		"the session of a proxy dialing through Hop",
+		"the Tailscale node ts",
+	}
+	if !slices.Equal(carriers, want) {
+		t.Errorf("carriers = %q, want %q", carriers, want)
 	}
 }

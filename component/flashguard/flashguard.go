@@ -127,13 +127,61 @@ func Carrier(ctx context.Context) (string, bool) {
 	return carrier, ok
 }
 
+// ProtectedRemote is the destination of metadata when it is protected, as
+// read now: a sniffer may later replace it with a name that is not.
+func ProtectedRemote(metadata *C.Metadata) string {
+	if ProtectedMetadata(metadata) {
+		return metadata.RemoteAddress()
+	}
+	return ""
+}
+
 // MarkDestination marks ctx when the connection it serves goes to a
-// protected destination, so a node further down its dialer chain refuses.
-func MarkDestination(ctx context.Context, metadata *C.Metadata) context.Context {
+// protected destination, or went to one before it was sniffed (earlier is
+// what ProtectedRemote read then), so a node further down its dialer chain
+// refuses.
+func MarkDestination(ctx context.Context, metadata *C.Metadata, earlier string) context.Context {
+	if earlier != "" {
+		return WithCarrier(ctx, "a connection to "+earlier)
+	}
 	if ProtectedMetadata(metadata) {
 		return WithCarrier(ctx, "a connection to "+metadata.RemoteAddress())
 	}
 	return ctx
+}
+
+// Node types that dial endpoints other than the server Addr names, which the
+// guard cannot check: a mount provider drops them.
+var uncheckedEndpointTypes = []string{"openvpn", "zerotier", "easytier", "masque"}
+
+// UncheckedEndpoints is a proxy mapping a mounted node may not be built from:
+// a type above, or a WireGuard node given peers, whose endpoints are theirs.
+func UncheckedEndpoints(mapping map[string]any) bool {
+	kind, _ := mapping["type"].(string)
+	kind = strings.ToLower(kind)
+	for _, unchecked := range uncheckedEndpointTypes {
+		if kind == unchecked {
+			return true
+		}
+	}
+	if kind != "wireguard" {
+		return false
+	}
+	for name, value := range mapping {
+		if !strings.EqualFold(strings.ReplaceAll(name, "_", "-"), "peers") || value == nil {
+			continue
+		}
+		if list, ok := value.([]any); !ok || len(list) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// IsRefused is a refusal however a hop above the node passed it on: by
+// wrapping, or, by one that keeps only the text, by its message.
+func IsRefused(err error) bool {
+	return err != nil && (errors.Is(err, ErrRefused) || strings.Contains(err.Error(), ErrRefused.Error()))
 }
 
 // Check is what a mounted node runs before it dials or listens.

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/metacubex/mihomo/component/flashguard"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -24,6 +25,7 @@ func (d byNameProxyDialer) DialContext(ctx context.Context, network, address str
 	if err != nil {
 		return nil, err
 	}
+	ctx = hopSession(ctx, d.proxyName)
 	tunnel, _ := d.tunnel.(Tunnel)
 	if tunnel == nil {
 		return nil, fmt.Errorf("tunnel is invalid, must be proxydialer.Tunnel, but got: %T", d.tunnel)
@@ -41,6 +43,7 @@ func (d byNameProxyDialer) ListenPacket(ctx context.Context, network, address st
 	if err != nil {
 		return nil, err
 	}
+	ctx = hopSession(ctx, d.proxyName)
 	tunnel, _ := d.tunnel.(Tunnel)
 	if tunnel == nil {
 		return nil, fmt.Errorf("tunnel is invalid, must be proxydialer.Tunnel, but got: %T", d.tunnel)
@@ -55,4 +58,14 @@ func (d byNameProxyDialer) ListenPacket(ctx context.Context, network, address st
 
 func NewByName(proxyName string, tunnel C.Tunnel) C.Dialer {
 	return byNameProxyDialer{proxyName: proxyName, tunnel: tunnel}
+}
+
+// Flash: a session a proxy opens through a dialer-proxy carries whatever
+// that proxy later sends, a tailnet connection too, and a mounted node
+// under it sees only the proxy's server. Such a dial is marked as carrying,
+// so a mounted node anywhere under it refuses it. This holds as well for a
+// proxy of a replaced config, whose dialer is looked up by name in the
+// config running now.
+func hopSession(ctx context.Context, proxyName string) context.Context {
+	return flashguard.WithCarrier(ctx, "the session of a proxy dialing through "+proxyName)
 }

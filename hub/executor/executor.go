@@ -84,6 +84,9 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 func ApplyConfig(cfg *config.Config, force bool) {
 	mux.Lock()
 	defer mux.Unlock()
+	if FlashBeforeApply != nil {
+		FlashBeforeApply(cfg)
+	}
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
