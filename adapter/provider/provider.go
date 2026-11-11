@@ -340,7 +340,7 @@ func (cp *CompatibleProvider) Close() error {
 	return cp.compatibleProvider.Close()
 }
 
-func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string, allowEmpty bool) (resource.Parser[[]C.Proxy], error) {
+func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string, allowEmpty bool, flash flashOptions) (resource.Parser[[]C.Proxy], error) {
 	var excludeTypeArray []string
 	if excludeType != "" {
 		excludeTypeArray = strings.Split(excludeType, "|")
@@ -395,6 +395,8 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 
 		proxies := []C.Proxy{}
 		proxiesSet := map[string]struct{}{}
+		dropped := map[int]bool{}
+		var accepted []map[string]any
 		for _, filterReg := range filterRegs {
 		LOOP1:
 			for idx, mapping := range schema.Proxies {
@@ -437,6 +439,11 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 					continue
 				}
 
+				var entry flashEntry
+				if flash.enabled() {
+					entry = flash.prepare(entry, mapping)
+				}
+
 				if len(dialerProxy) > 0 {
 					mapping["dialer-proxy"] = dialerProxy
 				}
@@ -445,6 +452,9 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 				if err != nil {
 					return nil, fmt.Errorf("proxy %d override error: %w", idx, err)
 				}
+				if flash.enabled() {
+					entry = flash.prepare(entry, mapping)
+				}
 
 				proxy, err := adapter.ParseProxy(mapping, adapter.WithTunnelForAPI(tunnel), adapter.WithProviderName(pdName))
 				if err != nil {
@@ -452,12 +462,22 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 				}
 
 				proxiesSet[name] = struct{}{}
+				if flash.enabled() && flash.drops(entry, proxy) {
+					_ = proxy.Close()
+					dropped[idx] = true
+					continue
+				}
 				proxies = append(proxies, proxy)
+				accepted = append(accepted, mapping)
 			}
 		}
 
+		if err := flash.gate(pdName, proxies, accepted); err != nil {
+			return nil, err
+		}
+
 		if len(proxies) == 0 {
-			if allowEmpty && len(filter) == 0 && onlyExcludedTypes(schema.Proxies, excludeTypeArray) {
+			if allowEmpty && len(filter) == 0 && onlyExcludedTypes(schema.Proxies, excludeTypeArray, dropped) {
 				return proxies, nil
 			}
 			if len(filter) > 0 {
@@ -471,9 +491,13 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 }
 
 // onlyExcludedTypes is true for an empty list or one whose every entry has an
-// excluded type, so a list of malformed entries is not taken as empty.
-func onlyExcludedTypes(mappings []map[string]any, excludeTypes []string) bool {
-	for _, mapping := range mappings {
+// excluded type or was dropped, so a list of malformed entries is not taken
+// as empty.
+func onlyExcludedTypes(mappings []map[string]any, excludeTypes []string, dropped map[int]bool) bool {
+	for idx, mapping := range mappings {
+		if dropped[idx] {
+			continue
+		}
 		pType, _ := mapping["type"].(string)
 		excluded := false
 		for _, excludeType := range excludeTypes {

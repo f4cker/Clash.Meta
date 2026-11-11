@@ -116,7 +116,9 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateProfile(cfg)
 	loadProvider(cfg.RuleProviders)
 	runtime.GC()
-	tunnel.OnRunning()
+	if FlashBeforeRunning == nil || FlashBeforeRunning() == nil {
+		tunnel.OnRunning()
+	}
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
