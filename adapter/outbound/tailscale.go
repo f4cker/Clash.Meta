@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
@@ -22,6 +24,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 
 	ts "github.com/metacubex/tailscale"
+	"github.com/metacubex/tailscale/client/local"
 	"github.com/metacubex/tailscale/envknob"
 	"github.com/metacubex/tailscale/hostinfo"
 	"github.com/metacubex/tailscale/ipn"
@@ -39,16 +42,46 @@ type Tailscale struct {
 	option      TailscaleOption
 	ctx         context.Context
 	cancel      context.CancelFunc
-	startOnce   sync.Once
-	startErr    error
+
+	generation       uint64
+	explicitStateDir bool
+
+	startMu       sync.Mutex
+	startErr      error
+	lastStartErr  error
+	serverStarted bool
+	closed        bool
+	closeOnce     sync.Once
+	closeErr      error
 
 	backendInitOnce sync.Once
 	backendInitCh   chan struct{}
 	backendInitErr  error
+	backendState    atomic.Value
 
-	serverStarted bool
+	exitNodeOnce sync.Once
+	exitNodeCh   chan struct{}
 
 	unregisterDNSResolver func()
+}
+
+var (
+	tailscaleGeneration atomic.Uint64
+	tailscaleRegistryMu sync.Mutex
+	tailscaleLive       = map[*Tailscale]struct{}{}
+	tailscaleDirOwners  = map[string]*Tailscale{}
+)
+
+// Every instance not closed yet, oldest first.
+func TailscaleInstances() []*Tailscale {
+	tailscaleRegistryMu.Lock()
+	instances := make([]*Tailscale, 0, len(tailscaleLive))
+	for t := range tailscaleLive {
+		instances = append(instances, t)
+	}
+	tailscaleRegistryMu.Unlock()
+	sort.Slice(instances, func(i, j int) bool { return instances[i].generation < instances[j].generation })
+	return instances
 }
 
 type TailscaleOption struct {
@@ -115,6 +148,10 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 	if _, err := buildTailscaleMaskedPrefs(option); err != nil {
 		return nil, err
 	}
+	explicitStateDir := option.StateDir != ""
+	if !explicitStateDir && TailscaleStateDirHook != nil {
+		option.StateDir = TailscaleStateDirHook(option.Name, option.ControlURL)
+	}
 	if option.StateDir == "" {
 		option.StateDir = "tailscale"
 	}
@@ -139,10 +176,16 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 			RoutingMark:  option.RoutingMark,
 			Prefer:       option.IPVersion,
 		}),
-		option:        option,
-		ctx:           ctx,
-		cancel:        cancel,
-		backendInitCh: make(chan struct{}),
+		option:           option,
+		ctx:              ctx,
+		cancel:           cancel,
+		generation:       tailscaleGeneration.Add(1),
+		explicitStateDir: explicitStateDir,
+		backendInitCh:    make(chan struct{}),
+		exitNodeCh:       make(chan struct{}),
+	}
+	if !tailscaleExitNodeNeedsStatus(option) {
+		outbound.exitNodeOnce.Do(func() { close(outbound.exitNodeCh) })
 	}
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 	outbound.server = &tsnet.Server{
@@ -171,46 +214,167 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 			return ips, err
 		},
 		UserLogf: func(format string, args ...any) {
-			log.Infoln("[Tailscale](%s) %s", option.Name, fmt.Sprintf(format, args...))
+			log.Infoln("[Tailscale](%s) %s", option.Name, RedactTailscaleLog(fmt.Sprintf(format, args...)))
 		},
 		Logf: func(format string, args ...any) {
-			log.Debugln("[Tailscale](%s) %s", option.Name, fmt.Sprintf(format, args...))
+			log.Debugln("[Tailscale](%s) %s", option.Name, RedactTailscaleLog(fmt.Sprintf(format, args...)))
 		},
 	}
 	dnsTransport := tailscaleDNSTransport{tailscale: outbound}
 	outbound.dnsResolver = dns.NewResolverFromClient(dnsTransport)
 	outbound.unregisterDNSResolver = dns.RegisterTailscaleDnsClient(option.Name, dnsTransport)
+	tailscaleRegistryMu.Lock()
+	tailscaleLive[outbound] = struct{}{}
+	tailscaleRegistryMu.Unlock()
 	return outbound, nil
 }
 
-func (t *Tailscale) start() error {
-	t.startOnce.Do(func() {
-		if err := t.server.Start(); err != nil {
-			t.startErr = err
-			t.setBackendInitialized(err)
-			return
+func (t *Tailscale) start(options TailscaleStartOptions) error {
+	t.startMu.Lock()
+	defer t.startMu.Unlock()
+	if t.closed {
+		return ErrTailscaleClosed
+	}
+	if !options.Explicit && TailscaleStartGate != nil {
+		if err := TailscaleStartGate(t, t.serverStarted); err != nil {
+			return err
 		}
-		t.serverStarted = true
-		ctx, cancel := context.WithTimeout(t.ctx, 30*time.Second)
-		defer cancel()
-		if err := t.applyPrefs(ctx); err != nil {
-			t.startErr = err
-			t.setBackendInitialized(err)
-			return
+	}
+	if t.serverStarted || t.startErr != nil {
+		return t.startErr
+	}
+	if err := t.claimStateDir(); err != nil {
+		t.lastStartErr = err
+		return err
+	}
+	if options.WithoutAuthKey {
+		t.server.AuthKey = ""
+	}
+	if err := t.server.Start(); err != nil {
+		t.startErr, t.lastStartErr = err, err
+		t.releaseStateDir()
+		t.setBackendInitialized(err)
+		return err
+	}
+	t.serverStarted = true
+	ctx, cancel := context.WithTimeout(t.ctx, 30*time.Second)
+	defer cancel()
+	if err := t.applyPrefs(ctx); err != nil {
+		t.startErr, t.lastStartErr = err, err
+		t.setBackendInitialized(err)
+		return err
+	}
+	go t.watchBackendState()
+	return nil
+}
+
+// Two live nodes on one state-dir would overwrite each other's identity. The
+// only holder given way to is an older instance of the same proxy, which a
+// reload left behind for the GC to close.
+func (t *Tailscale) claimStateDir() error {
+	dir := t.option.StateDir
+	for attempt := 0; ; attempt++ {
+		tailscaleRegistryMu.Lock()
+		owner, held := tailscaleDirOwners[dir]
+		if !held || owner == t {
+			tailscaleDirOwners[dir] = t
+			tailscaleRegistryMu.Unlock()
+			return nil
 		}
-		go t.watchBackendState()
-	})
-	return t.startErr
+		tailscaleRegistryMu.Unlock()
+		if attempt > 0 || owner.Name() != t.Name() || owner.generation > t.generation {
+			return &TailscaleStateDirInUseError{Dir: dir, Owner: owner.Name()}
+		}
+		log.Infoln("[Tailscale](%s) closing the replaced instance holding its state-dir", t.Name())
+		_ = owner.Close()
+	}
+}
+
+func (t *Tailscale) releaseStateDir() {
+	tailscaleRegistryMu.Lock()
+	if tailscaleDirOwners[t.option.StateDir] == t {
+		delete(tailscaleDirOwners, t.option.StateDir)
+	}
+	tailscaleRegistryMu.Unlock()
 }
 
 func (t *Tailscale) ensureStarted(ctx context.Context) error {
-	if err := t.start(); err != nil {
+	if err := t.start(TailscaleStartOptions{}); err != nil {
+		return err
+	}
+	if err := t.waitBackendInitialized(ctx); err != nil {
+		return err
+	}
+	return t.waitExitNode(ctx)
+}
+
+// Traffic waits for a configured exit node once the node runs, so nothing
+// leaves through the tailnet before the exit node the config names is set.
+func (t *Tailscale) waitExitNode(ctx context.Context) error {
+	if t.BackendState() != ipn.Running.String() {
+		return nil
+	}
+	select {
+	case <-t.exitNodeCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.ctx.Done():
+		return t.ctx.Err()
+	}
+}
+
+func (t *Tailscale) Start(ctx context.Context, options TailscaleStartOptions) error {
+	if err := t.start(options); err != nil {
 		return err
 	}
 	return t.waitBackendInitialized(ctx)
 }
 
+func (t *Tailscale) LocalClient() (*local.Client, error) {
+	t.startMu.Lock()
+	started, closed := t.serverStarted, t.closed
+	t.startMu.Unlock()
+	if closed {
+		return nil, ErrTailscaleClosed
+	}
+	if !started {
+		return nil, ErrTailscaleNotStarted
+	}
+	return t.server.LocalClient()
+}
+
+func (t *Tailscale) Generation() uint64 { return t.generation }
+
+func (t *Tailscale) Option() TailscaleOption { return t.option }
+
+func (t *Tailscale) ExplicitStateDir() bool { return t.explicitStateDir }
+
+func (t *Tailscale) Started() bool {
+	t.startMu.Lock()
+	defer t.startMu.Unlock()
+	return t.serverStarted
+}
+
+func (t *Tailscale) Closed() bool {
+	t.startMu.Lock()
+	defer t.startMu.Unlock()
+	return t.closed
+}
+
+func (t *Tailscale) LastStartError() error {
+	t.startMu.Lock()
+	defer t.startMu.Unlock()
+	return t.lastStartErr
+}
+
+func (t *Tailscale) BackendState() string {
+	state, _ := t.backendState.Load().(string)
+	return state
+}
+
 func (t *Tailscale) watchBackendState() {
+	defer t.exitNodeOnce.Do(func() { close(t.exitNodeCh) })
 	lc, err := t.server.LocalClient()
 	if err != nil {
 		t.setBackendInitialized(err)
@@ -224,29 +388,38 @@ func (t *Tailscale) watchBackendState() {
 	defer watcher.Close()
 
 	backendInitialized := false
-	exitNodeNeedsStatus := tailscaleExitNodeNeedsStatus(t.option)
+	exitNodePending := tailscaleExitNodeNeedsStatus(t.option)
 	for {
 		n, err := watcher.Next()
 		if err != nil {
 			t.setBackendInitialized(err)
 			return
 		}
+		if n.BrowseToURL != nil && *n.BrowseToURL != "" {
+			if hook := TailscaleStateHook; hook != nil {
+				hook(t, t.BackendState(), true)
+			}
+		}
 		if n.State == nil {
 			continue
 		}
+		state := n.State.String()
+		changed := state != t.BackendState()
+		t.backendState.Store(state)
 
 		if *n.State != ipn.NoState && !backendInitialized {
 			t.setBackendInitialized(nil)
 			backendInitialized = true
-			if !exitNodeNeedsStatus {
-				return
-			}
 		}
-		if exitNodeNeedsStatus && *n.State == ipn.Running {
+		if exitNodePending && *n.State == ipn.Running {
+			exitNodePending = false
 			if err := t.applyExitNodePrefs(t.ctx); err != nil {
 				log.Warnln("[Tailscale](%s) set exit node failed: %v", t.Name(), err)
 			}
-			return
+			t.exitNodeOnce.Do(func() { close(t.exitNodeCh) })
+		}
+		if hook := TailscaleStateHook; changed && hook != nil {
+			hook(t, state, false)
 		}
 	}
 }
@@ -465,15 +638,22 @@ func (t *Tailscale) IsL3Protocol(metadata *C.Metadata) bool {
 }
 
 func (t *Tailscale) Close() error {
-	t.cancel()
-	if t.unregisterDNSResolver != nil {
-		t.unregisterDNSResolver()
-	}
-	t.startOnce.Do(func() {
-		t.startErr = errors.New("tailscale outbound closed")
+	t.closeOnce.Do(func() {
+		t.cancel()
+		if t.unregisterDNSResolver != nil {
+			t.unregisterDNSResolver()
+		}
+		t.startMu.Lock()
+		t.closed = true
+		started := t.serverStarted
+		t.startMu.Unlock()
+		if started { // tsnet.Server.Close() must not be called before or concurrently with Start.
+			t.closeErr = t.server.Close()
+		}
+		t.releaseStateDir()
+		tailscaleRegistryMu.Lock()
+		delete(tailscaleLive, t)
+		tailscaleRegistryMu.Unlock()
 	})
-	if t.server != nil && t.serverStarted { // tsnet.Server.Close() must not be called before or concurrently with Start.
-		return t.server.Close()
-	}
-	return nil
+	return t.closeErr
 }
