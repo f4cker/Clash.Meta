@@ -37,7 +37,7 @@ func TestRuleSetGateRefusalKeepsTheLoadedRules(t *testing.T) {
 	SetTunnel(quietTunnel{utils.NewCallback[P.RuleProvider]()})
 	t.Cleanup(func() { SetTunnel(previous) })
 	refused := errors.New("refused")
-	RuleSetGate = func(name string, strategy any) error {
+	RuleSetGate = func(name string, strategy any, raw []byte, behavior P.RuleBehavior, format P.RuleFormat) error {
 		if strategy.(ruleStrategy).Count() > 1 {
 			return refused
 		}

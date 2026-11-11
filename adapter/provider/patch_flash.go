@@ -1,12 +1,16 @@
 package provider
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/dlclark/regexp2"
+	"github.com/metacubex/mihomo/adapter"
+	"github.com/metacubex/mihomo/component/flashguard"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -16,11 +20,14 @@ import (
 var ProxiesGate func(name string, mappings []map[string]any) error
 
 // What Flash sets on a provider it mounts: a node whose dialer-proxy matches
-// excludeDialer, or that binds an interface, is dropped before it is built.
+// excludeDialer, or that binds an interface or a routing mark, is dropped
+// before it is built. A mount provider also drops a node whose server is
+// protected, and guards every node it keeps.
 type flashOptions struct {
 	excludeDialer    *regexp2.Regexp
 	excludeInterface bool
 	gated            bool
+	mount            bool
 }
 
 func newFlashOptions(excludeDialer string, excludeInterface bool) (flashOptions, error) {
@@ -36,7 +43,7 @@ func newFlashOptions(excludeDialer string, excludeInterface bool) (flashOptions,
 }
 
 func (o flashOptions) enabled() bool {
-	return o.excludeDialer != nil || o.excludeInterface
+	return o.excludeDialer != nil || o.excludeInterface || o.mount
 }
 
 // The proxy decoder takes a key ignoring case and with _ read as -, and picks
@@ -105,6 +112,7 @@ func weakStringValue(value any) (string, bool) {
 type flashEntry struct {
 	dialers    []string
 	interfaces []string
+	marks      []string
 }
 
 // Read before the provider's own dialer-proxy and override and again after,
@@ -112,13 +120,20 @@ type flashEntry struct {
 func (o flashOptions) prepare(entry flashEntry, mapping map[string]any) flashEntry {
 	entry.dialers = append(entry.dialers, canonicalizeKey(mapping, "dialer-proxy")...)
 	entry.interfaces = append(entry.interfaces, canonicalizeKey(mapping, "interface-name")...)
+	entry.marks = append(entry.marks, canonicalizeKey(mapping, "routing-mark")...)
 	return entry
 }
 
 func (o flashOptions) drops(entry flashEntry, proxy C.Proxy) bool {
 	info := proxy.ProxyInfo()
-	if o.excludeInterface && (info.Interface != "" || slices.ContainsFunc(entry.interfaces, func(value string) bool { return value != "" })) {
+	set := func(value string) bool { return value != "" && value != "0" }
+	if o.excludeInterface && (info.Interface != "" || info.RoutingMark != 0 || slices.ContainsFunc(entry.interfaces, set) || slices.ContainsFunc(entry.marks, set)) {
 		return true
+	}
+	if o.mount {
+		if host, _, err := net.SplitHostPort(proxy.Addr()); err == nil && flashguard.ProtectedServer(host) {
+			return true
+		}
 	}
 	if o.excludeDialer == nil {
 		return false
@@ -140,4 +155,57 @@ func (o flashOptions) gate(name string, proxies []C.Proxy, accepted []map[string
 		return err
 	}
 	return nil
+}
+
+// guardMountProxy wraps a node of a mount provider so it refuses Tailscale
+// traffic before it dials or listens.
+func guardMountProxy(providerName string, proxy C.Proxy) C.Proxy {
+	if !flashguard.IsMountProvider(providerName) {
+		return proxy
+	}
+	return adapter.NewProxy(&mountGuard{ProxyAdapter: proxy.Adapter()})
+}
+
+type mountGuard struct {
+	C.ProxyAdapter
+}
+
+func (g *mountGuard) check(ctx context.Context, metadata *C.Metadata) error {
+	host, _, err := net.SplitHostPort(g.Addr())
+	if err != nil {
+		host = g.Addr()
+	}
+	return flashguard.Check(ctx, g.Name(), host, metadata)
+}
+
+func (g *mountGuard) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
+	if err := g.check(ctx, metadata); err != nil {
+		return nil, err
+	}
+	return g.ProxyAdapter.DialContext(ctx, metadata)
+}
+
+func (g *mountGuard) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
+	if err := g.check(ctx, metadata); err != nil {
+		return nil, err
+	}
+	pc, err := g.ProxyAdapter.ListenPacketContext(ctx, metadata)
+	if err != nil {
+		return nil, err
+	}
+	return &guardedPacketConn{PacketConn: pc, node: g.Name()}, nil
+}
+
+// A packet connection may be reused for other destinations than the one it
+// was opened for.
+type guardedPacketConn struct {
+	C.PacketConn
+	node string
+}
+
+func (c *guardedPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if err := flashguard.CheckPacket(c.node, addr); err != nil {
+		return 0, err
+	}
+	return c.PacketConn.WriteTo(b, addr)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/metacubex/mihomo/common/atomic"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/flashguard"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/nat"
 	"github.com/metacubex/mihomo/component/process"
@@ -465,7 +466,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			}
 
 			dialMetadata := metadata.Pure()
-			ctx, cancel := context.WithTimeout(context.Background(), C.DefaultUDPTimeout)
+			ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata), C.DefaultUDPTimeout)
 			defer cancel()
 			rawPc, err := retry(ctx, func(ctx context.Context) (C.PacketConn, error) {
 				return proxy.ListenPacketContext(ctx, dialMetadata)
@@ -572,7 +573,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 	var peekBytes []byte
 	var peekLen int
 
-	ctx, cancel := context.WithTimeout(context.Background(), C.DefaultTCPTimeout)
+	ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata), C.DefaultTCPTimeout)
 	defer cancel()
 	remoteConn, err := retry(ctx, func(ctx context.Context) (remoteConn C.Conn, err error) {
 		remoteConn, err = proxy.DialContext(ctx, dialMetadata)
@@ -732,6 +733,9 @@ func shouldStopRetry(err error) bool {
 		return true
 	}
 	if errors.Is(err, loopback.ErrReject) {
+		return true
+	}
+	if errors.Is(err, flashguard.ErrRefused) {
 		return true
 	}
 	return false

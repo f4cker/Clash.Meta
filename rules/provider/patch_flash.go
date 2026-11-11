@@ -8,8 +8,9 @@ import (
 
 // RuleSetGate sees the rules a file or http rule set is about to hold, on its
 // first load and on every update, and may refuse them; the set then keeps
-// what it had and its file is not rewritten.
-var RuleSetGate func(name string, strategy any) error
+// what it had and its file is not rewritten. raw is what was read, so a
+// classical set can be read again without building its rules.
+var RuleSetGate func(name string, strategy any, raw []byte, behavior P.RuleBehavior, format P.RuleFormat) error
 
 // ParseRuleSet reads a rule set as a provider of it would, without a vehicle.
 // The result answers Match, and ToIpCidr, DumpMrs or Rules by behavior.
@@ -34,11 +35,11 @@ func (c *classicalStrategy) Rules() []C.Rule {
 	return c.rules
 }
 
-func gateRuleSet(name string, strategy ruleStrategy, err error) (ruleStrategy, error) {
+func gateRuleSet(name string, strategy ruleStrategy, err error, raw []byte, behavior P.RuleBehavior, format P.RuleFormat) (ruleStrategy, error) {
 	if err != nil || RuleSetGate == nil {
 		return strategy, err
 	}
-	if err := RuleSetGate(name, strategy); err != nil {
+	if err := RuleSetGate(name, strategy, raw, behavior, format); err != nil {
 		return nil, err
 	}
 	return strategy, nil

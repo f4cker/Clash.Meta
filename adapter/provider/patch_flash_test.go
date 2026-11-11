@@ -1,10 +1,14 @@
 package provider
 
 import (
+	"context"
 	"errors"
+	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/metacubex/mihomo/component/flashguard"
 	C "github.com/metacubex/mihomo/constant"
 )
 
@@ -87,5 +91,75 @@ func TestProxiesGateRefusalKeepsTheLoadedNodes(t *testing.T) {
 	}
 	if got := proxyNames(pd.Proxies()); !slices.Equal(got, []string{"a", "b"}) {
 		t.Fatalf("proxies = %v, want [a b] kept", got)
+	}
+}
+
+func TestMountProviderDropsProtectedServersAndRoutingMarks(t *testing.T) {
+	flash, err := newFlashOptions("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flash.mount = true
+	parser, err := NewProxiesParser("flash-mount-1", nil, "", "", "tailscale", "", overrideSchema{}, "", true, flash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxies, err := parser([]byte(`proxies:
+  - {name: loop, type: socks5, server: 127.0.0.1, port: 1055}
+  - {name: local, type: socks5, server: localhost, port: 1055}
+  - {name: v6, type: socks5, server: "::1", port: 1055}
+  - {name: tailnet, type: socks5, server: 100.101.2.3, port: 1080}
+  - {name: magic, type: socks5, server: box.tail1.ts.net, port: 1080}
+  - {name: marked, type: socks5, server: 192.0.2.1, port: 1, routing-mark: 6666}
+  - {name: plain, type: socks5, server: 192.0.2.1, port: 2}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := proxyNames(proxies); !slices.Equal(got, []string{"plain"}) {
+		t.Fatalf("kept %v, want [plain]", got)
+	}
+}
+
+func TestMountProviderNodeRefusesTailscaleBeforeItDials(t *testing.T) {
+	parser, err := NewProxiesParser("flash-mount-1", nil, "", "", "", "", overrideSchema{}, "", false, flashOptions{mount: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxies, err := parser([]byte("proxies:\n  - {name: m, type: socks5, server: 192.0.2.1, port: 9, udp: true}\n"))
+	if err != nil || len(proxies) != 1 {
+		t.Fatalf("got %d proxies, err %v", len(proxies), err)
+	}
+	node := proxies[0]
+	if node.ProxyInfo().ProviderName != "flash-mount-1" || node.Name() != "m" {
+		t.Errorf("the guarded node reads as %s of %s", node.Name(), node.ProxyInfo().ProviderName)
+	}
+	// 192.0.2.1 is never reached: a refusal returns before any dial, a
+	// dial would only time out.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	tailnet := &C.Metadata{NetWork: C.TCP, DstIP: netip.MustParseAddr("100.100.1.1"), DstPort: 22}
+	start := time.Now()
+	if _, err := node.DialContext(ctx, tailnet); !errors.Is(err, flashguard.ErrRefused) {
+		t.Errorf("a dial to 100.100.1.1 = %v, want ErrRefused", err)
+	}
+	udp := &C.Metadata{NetWork: C.UDP, Host: "nas.tail1.ts.net", DstPort: 53}
+	if _, err := node.ListenPacketContext(ctx, udp); !errors.Is(err, flashguard.ErrRefused) {
+		t.Errorf("a listen for nas.tail1.ts.net = %v, want ErrRefused", err)
+	}
+	carried := flashguard.WithCarrier(ctx, "the Tailscale node ts")
+	if _, err := node.DialContext(carried, &C.Metadata{NetWork: C.TCP, Host: "derp1.example", DstPort: 443}); !errors.Is(err, flashguard.ErrRefused) {
+		t.Errorf("a Tailscale node's dial to a public DERP = %v, want ErrRefused", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("refusals took %v, want them before any dial", elapsed)
+	}
+	plain, err := NewProxiesParser("plain", nil, "", "", "", "", overrideSchema{}, "", false, flashOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	others, _ := plain([]byte("proxies:\n  - {name: p, type: direct}\n"))
+	if _, guarded := others[0].Adapter().(*mountGuard); guarded {
+		t.Error("a node of another provider is guarded")
 	}
 }
