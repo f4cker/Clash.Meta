@@ -40,6 +40,7 @@ type Tailscale struct {
 	server      *tsnet.Server
 	dnsResolver *dns.Resolver
 	option      TailscaleOption
+	configured  TailscaleOption
 	ctx         context.Context
 	cancel      context.CancelFunc
 
@@ -145,6 +146,10 @@ func init() {
 }
 
 func NewTailscale(option TailscaleOption) (*Tailscale, error) {
+	configured := option
+	if TailscaleOptionHook != nil {
+		TailscaleOptionHook(&option)
+	}
 	if _, err := buildTailscaleMaskedPrefs(option); err != nil {
 		return nil, err
 	}
@@ -177,6 +182,7 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 			Prefer:       option.IPVersion,
 		}),
 		option:           option,
+		configured:       configured,
 		ctx:              ctx,
 		cancel:           cancel,
 		generation:       tailscaleGeneration.Add(1),
@@ -347,6 +353,8 @@ func (t *Tailscale) LocalClient() (*local.Client, error) {
 func (t *Tailscale) Generation() uint64 { return t.generation }
 
 func (t *Tailscale) Option() TailscaleOption { return t.option }
+
+func (t *Tailscale) ConfiguredOption() TailscaleOption { return t.configured }
 
 func (t *Tailscale) ExplicitStateDir() bool { return t.explicitStateDir }
 

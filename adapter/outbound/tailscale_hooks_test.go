@@ -107,3 +107,40 @@ func TestTailscaleStartGate(t *testing.T) {
 		t.Fatal("a closed instance is still listed")
 	}
 }
+
+func TestTailscaleOptionHook(t *testing.T) {
+	C.SetHomeDir(t.TempDir())
+	accept := true
+	TailscaleOptionHook = func(option *TailscaleOption) {
+		if option.ProviderName == "sub" {
+			option.ExitNode = "100.64.0.9"
+			option.AcceptRoutes = &accept
+		}
+	}
+	t.Cleanup(func() { TailscaleOptionHook = nil })
+
+	ts, err := NewTailscale(TailscaleOption{
+		BasicOption: BasicOption{ProviderName: "sub"},
+		Name:        "from-provider",
+		StateDir:    "provider",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ts.Close() })
+	if option := ts.Option(); option.ExitNode != "100.64.0.9" || option.AcceptRoutes == nil || !*option.AcceptRoutes {
+		t.Fatalf("option = %+v", option)
+	}
+	if configured := ts.ConfiguredOption(); configured.ExitNode != "" || configured.AcceptRoutes != nil {
+		t.Fatalf("configured = %+v", configured)
+	}
+	select {
+	case <-ts.exitNodeCh:
+		t.Fatal("traffic would not wait for the exit node the hook set")
+	default:
+	}
+	untouched := newTestTailscale(t, "own", "own")
+	if untouched.Option().ExitNode != "" {
+		t.Fatal("the hook changed a node it left alone")
+	}
+}
