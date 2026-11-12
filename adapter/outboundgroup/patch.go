@@ -48,3 +48,35 @@ func (gb *GroupBase) joinProviderProxies(parts [][]C.Proxy) []C.Proxy {
 	}
 	return proxies
 }
+
+// GetProxies lists the providers' proxies, then what the runtime source adds.
+func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
+	proxies := gb.providerGetProxies(touch)
+	extra := gb.RuntimeProxies()
+	if len(extra) == 0 {
+		return proxies
+	}
+	joined := make([]C.Proxy, 0, len(proxies)+len(extra))
+	joined = append(joined, proxies...)
+	for _, proxy := range extra {
+		if proxy != nil && proxy.Name() != gb.Name() {
+			joined = append(joined, proxy)
+		}
+	}
+	return joined
+}
+
+// SetRuntimeProxies lets a host add members after the parse: listed last, past
+// every filter, and asked again on each read; nil takes them away.
+func (gb *GroupBase) SetRuntimeProxies(source func() []C.Proxy) {
+	gb.runtimeProxies.Store(source)
+}
+
+// RuntimeProxies is what the runtime source adds right now.
+func (gb *GroupBase) RuntimeProxies() []C.Proxy {
+	source := gb.runtimeProxies.Load()
+	if source == nil {
+		return nil
+	}
+	return source()
+}

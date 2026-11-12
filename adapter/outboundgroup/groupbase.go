@@ -40,6 +40,8 @@ type GroupBase struct {
 	getProxiesMutex  sync.Mutex
 	providerVersions []uint32
 	providerProxies  []C.Proxy
+
+	runtimeProxies atomic.TypedValue[func() []C.Proxy]
 }
 
 type GroupBaseOption struct {
@@ -122,7 +124,7 @@ func (gb *GroupBase) Touch() {
 	}
 }
 
-func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
+func (gb *GroupBase) providerGetProxies(touch bool) []C.Proxy {
 	providerVersions := make([]uint32, len(gb.providers))
 	for i, pd := range gb.providers {
 		if touch { // touch first
