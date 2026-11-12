@@ -24,6 +24,7 @@ type exitFixture struct {
 	offered   bool
 	listed    bool
 	exitSet   bool
+	expected  bool
 	readError error
 }
 
@@ -82,6 +83,10 @@ func startedExitNode(t *testing.T, fixture exitFixture) *Tailscale {
 	previous := tailscaleReadExitStatus
 	tailscaleReadExitStatus = fixture.read
 	t.Cleanup(func() { tailscaleReadExitStatus = previous })
+	if fixture.expected {
+		expected := true
+		node.SetExitExpected(&expected)
+	}
 	return node
 }
 
@@ -99,6 +104,7 @@ func TestTailscaleExitStateReasons(t *testing.T) {
 		{"starting", exitFixture{backend: "Starting", exitSet: true}, TailscaleExitUnknown},
 		{"unread", exitFixture{exitSet: true, readError: errors.New("closed")}, TailscaleExitUnknown},
 		{"no exit", exitFixture{backend: "Running", listed: true}, ""},
+		{"exit lost from prefs", exitFixture{backend: "Running", online: true, offered: true, listed: true, expected: true}, TailscaleExitMissing},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node := startedExitNode(t, tc.fixture)
