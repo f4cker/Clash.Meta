@@ -63,6 +63,7 @@ type Tailscale struct {
 
 	exitNodeOnce sync.Once
 	exitNodeCh   chan struct{}
+	exitCache    tailscaleExitCache
 
 	unregisterDNSResolver func()
 }
@@ -540,6 +541,9 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 	if err = t.ensureStarted(ctx); err != nil {
 		return nil, err
 	}
+	if err = t.metadataRefusal(ctx, metadata); err != nil {
+		return nil, err
+	}
 	netStack, err := t.server.Netstack(ctx)
 	if err != nil {
 		return nil, err
@@ -575,6 +579,9 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 
 func (t *Tailscale) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (_ C.PacketConn, err error) {
 	if err = t.ensureStarted(ctx); err != nil {
+		return nil, err
+	}
+	if err = t.metadataRefusal(ctx, metadata); err != nil {
 		return nil, err
 	}
 	if err = t.ResolveUDP(ctx, metadata); err != nil {
@@ -624,6 +631,9 @@ func (t tailscaleDNSTransport) ExchangeContext(ctx context.Context, msg *D.Msg) 
 		return nil, err
 	}
 	q := msg.Question[0]
+	if err := t.tailscale.exitRefusal(ctx, q.Name, netip.Addr{}); err != nil {
+		return nil, fmt.Errorf("query %s: %w", q.Name, err)
+	}
 	qtypeName, ok := D.TypeToString[q.Qtype]
 	if !ok {
 		return nil, fmt.Errorf("unsupported query type: %d", q.Qtype)
