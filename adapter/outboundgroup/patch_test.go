@@ -100,3 +100,47 @@ func TestUsePositionListsProvidersBetweenProxies(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeProxiesComeLastPastEveryFilter(t *testing.T) {
+	rejecting := func(name string) C.Proxy {
+		return adapter.NewProxy(outbound.NewRejectWithOption(outbound.RejectOption{Name: name}))
+	}
+	proxyMap := map[string]C.Proxy{"COMPATIBLE": namedProxy("COMPATIBLE"), "HK": rejecting("HK"), "US": rejecting("US")}
+	parsed, err := ParseProxyGroup(map[string]any{
+		"name":           "Media",
+		"type":           "select",
+		"proxies":        []any{"HK", "US"},
+		"use":            []any{"p1"},
+		"filter":         "hk",
+		"exclude-filter": "Exit",
+		"exclude-type":   "Direct",
+	}, proxyMap, map[string]P.ProxyProvider{
+		"p1": &fakeProvider{name: "p1", proxies: []C.Proxy{rejecting("p1-hk"), rejecting("p1-us")}},
+	}, nil, nil)
+	require.NoError(t, err)
+	selector := parsed.(*Selector)
+	exit := namedProxy("Exit")
+	var on bool
+	selector.SetRuntimeProxies(func() []C.Proxy {
+		if on {
+			return []C.Proxy{exit, namedProxy("Media")}
+		}
+		return nil
+	})
+	names := func() []string {
+		var names []string
+		for _, proxy := range selector.Proxies() {
+			names = append(names, proxy.Name())
+		}
+		return names
+	}
+	require.Equal(t, []string{"HK", "US", "p1-hk"}, names())
+	on = true
+	require.Equal(t, []string{"HK", "US", "p1-hk", "Exit"}, names())
+	require.Equal(t, "HK", selector.Now())
+	require.NoError(t, selector.Set("Exit"))
+	require.Equal(t, "Exit", selector.Now())
+	on = false
+	require.Equal(t, "HK", selector.Now())
+	require.Error(t, selector.Set("Exit"))
+}
