@@ -64,6 +64,23 @@ const tailscaleExitStateTTL = time.Second
 type tailscaleExitCache struct {
 	mu    sync.Mutex
 	state *TailscaleExitState
+	// Set by the host: nil follows the option's exit-node.
+	expected *bool
+}
+
+// SetExitExpected says whether the host chose an exit node for this node, so
+// one its prefs lost still counts as configured; nil follows the option.
+func (t *Tailscale) SetExitExpected(expected *bool) {
+	t.exitCache.mu.Lock()
+	t.exitCache.expected, t.exitCache.state = expected, nil
+	t.exitCache.mu.Unlock()
+}
+
+func (t *Tailscale) exitExpectedLocked() bool {
+	if expected := t.exitCache.expected; expected != nil {
+		return *expected
+	}
+	return t.option.ExitNode != ""
 }
 
 var tailscaleReadExitStatus = func(ctx context.Context, t *Tailscale) (*ipnstate.Status, *ipn.Prefs, error) {
@@ -92,11 +109,12 @@ func (t *Tailscale) ExitState(ctx context.Context, fresh bool) TailscaleExitStat
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	st, prefs, err := tailscaleReadExitStatus(readCtx, t)
+	expected := t.exitExpectedLocked()
 	if err != nil {
 		t.exitCache.state = nil
-		return TailscaleExitState{Configured: t.option.ExitNode != "", Reason: TailscaleExitUnknown}
+		return TailscaleExitState{Configured: expected, Reason: TailscaleExitUnknown}
 	}
-	state := tailscaleExitStateOf(st, prefs)
+	state := tailscaleExitStateOf(st, prefs, expected)
 	state.read = time.Now()
 	t.exitCache.state = &state
 	return state
@@ -109,10 +127,10 @@ func (t *Tailscale) InvalidateExitState() {
 	t.exitCache.mu.Unlock()
 }
 
-func tailscaleExitStateOf(st *ipnstate.Status, prefs *ipn.Prefs) TailscaleExitState {
-	state := TailscaleExitState{hosts: map[string]bool{}}
-	if prefs != nil {
-		state.Configured = !prefs.ExitNodeID.IsZero() || prefs.ExitNodeIP.IsValid() || prefs.AutoExitNode != ""
+func tailscaleExitStateOf(st *ipnstate.Status, prefs *ipn.Prefs, expected bool) TailscaleExitState {
+	state := TailscaleExitState{Configured: expected, hosts: map[string]bool{}}
+	if prefs != nil && (!prefs.ExitNodeID.IsZero() || prefs.ExitNodeIP.IsValid() || prefs.AutoExitNode != "") {
+		state.Configured = true
 	}
 	if st == nil {
 		state.Reason = TailscaleExitUnknown
