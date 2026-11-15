@@ -1,17 +1,20 @@
 package resource
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/tailscale/atomicfile"
 
 	"github.com/metacubex/http"
 )
@@ -76,8 +79,51 @@ func (f *FileVehicle) Proxy() string {
 	return ""
 }
 
+type fileOwnerInfo struct{ os.FileInfo }
+
+func (fileOwnerInfo) Uname() (string, error) { return "", nil }
+func (fileOwnerInfo) Gname() (string, error) { return "", nil }
+
 func (f *FileVehicle) Write(buf []byte) error {
-	return safeWrite(f.path, buf)
+	path := f.path
+	info, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if info != nil && !info.Mode().IsRegular() {
+		return errors.New("provider input is not a regular file")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".provider-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if _, err := file.Write(buf); err != nil {
+		return err
+	}
+	if info != nil && runtime.GOOS != "windows" {
+		owner, err := tar.FileInfoHeader(fileOwnerInfo{info}, "")
+		if err != nil {
+			return err
+		}
+		if err := file.Chown(owner.Uid, owner.Gid); err != nil {
+			return err
+		}
+		if err := file.Chmod(info.Mode()); err != nil {
+			return err
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return atomicfile.Rename(file.Name(), path)
 }
 
 func NewFileVehicle(path string) *FileVehicle {

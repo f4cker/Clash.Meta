@@ -114,6 +114,16 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
+	if f.vehicle.Type() == P.File {
+		f.loadBufMutex.Lock()
+		defer f.loadBufMutex.Unlock()
+		buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+		if err != nil {
+			f.backoff.AddAttempt()
+			return lo.Empty[V](), false, err
+		}
+		return f.loadBufLocked(buf, hash, false)
+	}
 	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
@@ -129,7 +139,10 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
+	return f.loadBufLocked(buf, hash, updateFile)
+}
 
+func (f *Fetcher[V]) loadBufLocked(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
 	now := time.Now()
 	if f.hash.Equal(hash) {
 		if updateFile {
