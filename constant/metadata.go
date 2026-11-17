@@ -217,6 +217,8 @@ type Metadata struct {
 	RawDstAddr net.Addr `json:"-"`
 	// Only domain rule
 	SniffHost string `json:"sniffHost"`
+	// Flash: the connection's TLS is decrypted.
+	Mitm bool `json:"mitm"`
 }
 
 func (m *Metadata) RemoteAddress() string {

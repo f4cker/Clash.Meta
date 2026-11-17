@@ -466,6 +466,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 				log.Warnln("[UDP] Parse metadata failed: %s", err.Error())
 				return nil, nil, err
 			}
+			if UDPDrop != nil && metadata.Type != C.INNER && UDPDrop(metadata) {
+				return nil, nil, errors.New("UDP to a decrypted host")
+			}
 
 			dialMetadata := metadata.Pure()
 			ctx, cancel := context.WithTimeout(flashguard.MarkDestination(context.Background(), metadata, earlier), C.DefaultUDPTimeout)
@@ -563,6 +566,13 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 
+	var intercept TCPInterceptor
+	if interceptable(metadata, proxy) {
+		peekMutex.Lock()
+		intercept = TCPIntercept(conn, metadata)
+		peekMutex.Unlock()
+	}
+
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
 		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
@@ -585,7 +595,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 			return
 		}
 
-		if N.NeedHandshake(remoteConn) {
+		if intercept == nil && N.NeedHandshake(remoteConn) {
 			defer func() {
 				if err != nil {
 					_ = remoteConn.Close()
@@ -627,6 +637,10 @@ func handleTCPConn(connCtx C.ConnContext) {
 	peekMutex.Lock()
 	defer peekMutex.Unlock()
 	_ = conn.SetReadDeadline(time.Time{}) // reset
+	if intercept != nil {
+		intercept(conn, remoteConn)
+		return
+	}
 	handleSocket(conn, remoteConn)
 }
 
