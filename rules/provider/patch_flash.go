@@ -44,3 +44,8 @@ func gateRuleSet(name string, strategy ruleStrategy, err error, raw []byte, beha
 	}
 	return strategy, nil
 }
+
+// Options reports the params a RULE-SET rule was written with.
+func (rs *RuleSet) Options() (isSrc bool, noResolve bool) {
+	return rs.isSrc, rs.noResolveIP
+}

@@ -121,3 +121,43 @@ func ResolveRoute(metadata *C.Metadata) (C.Proxy, error) {
 	proxy, _, err := resolveMetadata(metadata)
 	return proxy, err
 }
+
+// RulesState is what the rules route by, read together under the lock an apply
+// replaces them with. None of it is written in place, so it stays valid after
+// the lock is dropped.
+type RulesState struct {
+	Rules         []C.Rule
+	SubRules      map[string][]C.Rule
+	RuleProviders map[string]P.RuleProvider
+	Proxies       map[string]C.Proxy
+	Mode          TunnelMode
+}
+
+func RulesSnapshot() RulesState {
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return RulesState{
+		Rules:         rules,
+		SubRules:      subRules,
+		RuleProviders: ruleProviders,
+		Proxies:       proxies,
+		Mode:          mode,
+	}
+}
+
+// PrepareMetadata runs the steps an incoming connection's metadata takes
+// before its rules are matched: an IP host moves to DstIP, a fake or mapped IP
+// gets its host back, and hosts entries apply.
+func PrepareMetadata(metadata *C.Metadata) error {
+	fixMetadata(metadata)
+	return preHandleMetadata(metadata)
+}
+
+// ResolveRouteRule is ResolveRoute that also names the rule that decided,
+// nil when none did.
+func ResolveRouteRule(metadata *C.Metadata) (C.Proxy, C.Rule, error) {
+	if err := PrepareMetadata(metadata); err != nil {
+		return nil, nil, err
+	}
+	return resolveMetadata(metadata)
+}
