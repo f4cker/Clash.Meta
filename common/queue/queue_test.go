@@ -213,3 +213,52 @@ func TestQueueWithDifferentTypes(t *testing.T) {
 	secondPerson := qStruct.Pop()
 	assert.Equal(t, "Bob", secondPerson.Name, "Second person's name should be 'Bob'")
 }
+
+func TestQueueConcurrentPublicOperations(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		queue *Queue[int]
+	}{{"constructor", New[int](10)}, {"zero", new(Queue[int])}} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := tc.queue
+			var workers sync.WaitGroup
+			workers.Add(3)
+			start := make(chan struct{})
+			go func() {
+				defer workers.Done()
+				<-start
+				for i := 0; i < 10000; i++ {
+					q.Put(i + 1)
+				}
+			}()
+			go func() {
+				defer workers.Done()
+				<-start
+				for i := 0; i < 10000; i++ {
+					q.Pop()
+				}
+			}()
+			go func() {
+				defer workers.Done()
+				<-start
+				for i := 0; i < 10000; i++ {
+					if last := q.Last(); last < 0 || last > 10000 {
+						t.Errorf("unexpected last item %d", last)
+					}
+				}
+			}()
+			close(start)
+			workers.Wait()
+			for q.Len() > 0 {
+				q.Pop()
+			}
+			if q.Last() != 0 || q.Pop() != 0 {
+				t.Fatal("empty queue must return zero values")
+			}
+			q.Put(42)
+			if q.Last() != 42 || q.Pop() != 42 || q.Len() != 0 {
+				t.Fatal("single item must survive concurrent use")
+			}
+		})
+	}
+}
