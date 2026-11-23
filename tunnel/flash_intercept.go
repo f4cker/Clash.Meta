@@ -22,6 +22,9 @@ var (
 	// the interceptor as its remote, which then answers the client without
 	// the site; the failure is still notified. nil leaves it as it was.
 	TCPInterceptUnreachable func(metadata *C.Metadata, proxy C.Proxy) C.Conn
+	// TCPInterceptDone, when set, is told once the tunnel let go of a flow
+	// TCPIntercept took, however it ended.
+	TCPInterceptDone func(metadata *C.Metadata)
 	// UDPDrop refuses a UDP flow, so that QUIC to a decrypted host falls back
 	// to TCP.
 	UDPDrop func(metadata *C.Metadata) bool

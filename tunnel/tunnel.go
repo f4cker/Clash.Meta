@@ -573,6 +573,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 		intercept = TCPIntercept(conn, metadata)
 		peekMutex.Unlock()
 	}
+	if intercept != nil && TCPInterceptDone != nil {
+		defer TCPInterceptDone(metadata)
+	}
 
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
