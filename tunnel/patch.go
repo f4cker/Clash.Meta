@@ -161,3 +161,15 @@ func ResolveRouteRule(metadata *C.Metadata) (C.Proxy, C.Rule, error) {
 	}
 	return resolveMetadata(metadata)
 }
+
+// DialFailureNotify hears of a connection the tunnel gave up dialing, after
+// its last retry. The connection never reaches the statistic Manager.
+type DialFailureNotify func(metadata *C.Metadata, rule C.Rule, proxy C.Proxy, err error)
+
+var DefaultDialFailureNotify DialFailureNotify
+
+func notifyDialFailure(metadata *C.Metadata, rule C.Rule, proxy C.Proxy, err error) {
+	if DefaultDialFailureNotify != nil {
+		DefaultDialFailureNotify(metadata, rule, proxy, err)
+	}
+}
