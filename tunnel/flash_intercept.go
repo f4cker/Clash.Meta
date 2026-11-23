@@ -17,6 +17,11 @@ var (
 	// every flow while decryption is off) do not wait for the client's first
 	// bytes before the dial.
 	TCPInterceptWanted func(metadata *C.Metadata) bool
+	// TCPInterceptUnreachable, when set, is asked after the dial of an
+	// intercepted flow failed. A non-nil stand-in is tracked and handed to
+	// the interceptor as its remote, which then answers the client without
+	// the site; nil leaves the failure as it was.
+	TCPInterceptUnreachable func(metadata *C.Metadata, proxy C.Proxy) C.Conn
 	// UDPDrop refuses a UDP flow, so that QUIC to a decrypted host falls back
 	// to TCP.
 	UDPDrop func(metadata *C.Metadata) bool
