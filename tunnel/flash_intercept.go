@@ -20,7 +20,7 @@ var (
 	// TCPInterceptUnreachable, when set, is asked after the dial of an
 	// intercepted flow failed. A non-nil stand-in is tracked and handed to
 	// the interceptor as its remote, which then answers the client without
-	// the site; nil leaves the failure as it was.
+	// the site; the failure is still notified. nil leaves it as it was.
 	TCPInterceptUnreachable func(metadata *C.Metadata, proxy C.Proxy) C.Conn
 	// UDPDrop refuses a UDP flow, so that QUIC to a decrypted host falls back
 	// to TCP.

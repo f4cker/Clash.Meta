@@ -626,6 +626,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 	})
 	if err != nil && intercept != nil && TCPInterceptUnreachable != nil {
 		if standIn := TCPInterceptUnreachable(metadata, proxy); standIn != nil {
+			notifyDialFailure(metadata, rule, proxy, err)
 			remoteConn, err = standIn, nil
 		}
 	}
