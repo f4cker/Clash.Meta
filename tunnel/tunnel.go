@@ -317,6 +317,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 }
 
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	defer noteRoute(metadata, mode, &rule, &err)
 	if metadata.SpecialProxy != "" {
 		var exist bool
 		proxy, exist = proxies[metadata.SpecialProxy]
@@ -713,6 +714,7 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 				}
 
 				if metadata.NetWork == C.UDP && !adapter.SupportUDP() {
+					noteUDPSkip(metadata, rule, adapter)
 					log.Debugln("%s UDP is not supported", adapter.Name())
 					continue
 				}

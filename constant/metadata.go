@@ -219,6 +219,17 @@ type Metadata struct {
 	SniffHost string `json:"sniffHost"`
 	// Flash: the connection's TLS is decrypted.
 	Mitm bool `json:"mitm"`
+	// Flash: rules a UDP flow matched but passed over, and why no rule decided it.
+	UDPSkipped  []UDPSkip `json:"udpSkipped,omitempty"`
+	RouteReason string    `json:"routeReason,omitempty"`
+}
+
+type UDPSkip struct {
+	Type    string `json:"type"`
+	Payload string `json:"payload"`
+	Adapter string `json:"adapter"`
+	Refused string `json:"refused,omitempty"`
+	Cause   string `json:"cause,omitempty"`
 }
 
 func (m *Metadata) RemoteAddress() string {
