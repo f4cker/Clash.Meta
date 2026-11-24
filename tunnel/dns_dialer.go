@@ -72,6 +72,7 @@ func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.
 			proxyAdapter, ok = Proxies()[proxyName]
 			if ok {
 				metadata.SpecialProxy = proxyName // just for log
+				metadata.RouteReason = RouteInternal
 			} else {
 				opts = append(opts, dialer.WithInterface(proxyName))
 			}
@@ -162,6 +163,7 @@ func (d *DNSDialer) ListenPacket(ctx context.Context, network, addr string) (net
 			proxyAdapter, ok = Proxies()[proxyName]
 			if ok {
 				metadata.SpecialProxy = proxyName // just for log
+				metadata.RouteReason = RouteInternal
 			} else {
 				opts = append(opts, dialer.WithInterface(proxyName))
 			}

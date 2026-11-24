@@ -26,11 +26,14 @@ type udpDisabler interface {
 }
 
 func noteUDPSkip(metadata *C.Metadata, rule C.Rule, target C.Proxy) {
-	skip := C.UDPSkip{Type: rule.RuleType().String(), Payload: rule.Payload(), Adapter: target.Name()}
-	if len(metadata.UDPSkipped) >= maxUDPSkipped || slices.Contains(metadata.UDPSkipped, skip) {
+	if len(metadata.UDPSkipped) >= maxUDPSkipped {
 		return
 	}
+	skip := C.UDPSkip{Type: rule.RuleType().String(), Payload: rule.Payload(), Adapter: target.Name()}
 	skip.Refused, skip.Cause = udpRefusal(metadata, target)
+	if slices.Contains(metadata.UDPSkipped, skip) {
+		return
+	}
 	metadata.UDPSkipped = append(slices.Clip(metadata.UDPSkipped), skip)
 }
 

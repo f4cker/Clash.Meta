@@ -317,6 +317,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 }
 
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	mode := mode
 	defer noteRoute(metadata, mode, &rule, &err)
 	if metadata.SpecialProxy != "" {
 		var exist bool
